@@ -1,0 +1,1138 @@
+---
+title: "COVID-19 Vaccines"
+author: "T3_Wed_suggrants"
+output:
+  flexdashboard::flex_dashboard:
+    vertical_layout: fill
+    source_code: embed
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+```{r libraries}
+library(tidyverse)
+library(naniar)
+library(lubridate)
+library(plotly)
+library(viridis)
+library(maps)
+library(ggthemes)
+library(tidytext)
+library(kableExtra)
+library(here)
+library(ggmap)
+library(modelr)
+library(broom)
+library(janitor)
+library(ggResidpanel)
+library(DT)
+library(flexdashboard)
+```
+
+Introduction and Data {data-orientation=rows}
+=====================================
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+Row
+-------------------------------------
+
+### Background
+
+For the past year and a half, COVID-19 has completely disturbed the world's way of living. Miraculously, scientists developed vaccines in record fashion. The aim of this report is to explore the current situation of the vaccines rollout worldwide and its relationship, if any, to various factors such as number of cases, GDP per capita, and corruption among others.
+
+### Research questions
+
+The questions we were interested in are:
+
+1. How did the ratio of a country's cases align with its ratio of vaccines administered? And what were the most vaccinated countries?
+2. What were the most and least common vaccines across the countries?
+3. How does GDP per capita influence the level of cases and vaccinations for a country?
+4. The relationship, if any, between vaccination numbers and corruption, and human development index
+
+Row
+-------------------------------------
+
+### Data
+
+1. COVID data
+
+This is a large dataset that contains many different types of information regarding COVID for each country and for each day since the pandemic began. The data set includes case numbers and vaccination numbers, as well as additional measures such as population, GDP, and development index. The dataset is accompanied by a codebook that explains each variable.
+
+This data was retrieved from Our World in Data website
+
+2. CPI - Corruption perception index
+
+The CPI scores and ranks countries based on how corrupt a country’s public sector is perceived to be by experts and business executives. The CPI is the most widely used indicator of corruption worldwide, it uses a scale of zero to 100, where zero is highly corrupted and 100 is very clean. 
+With the help of CPI, we can see how corruption undermines states’ capacity to respond to emergencies such as dual health and economic crisis delivered by COVID-19.
+
+This data was retrieved from transparency.org
+
+3. Vaccination data
+
+This dataset consists of datas on the various brands of vaccines available and being used by each country, the amount of vaccination that have taken place on a specific date in a particular country.
+
+This data was retrieved from The World Health Organisation
+
+### Limitations:
+
+* We can only report on which countries possess each brand, however number of vaccinations administered per brand was not explored as no such dataset was located
+
+* The data was constrained to only April 1, 2021, therefore time series analysis was not performed
+
+
+
+Data Cleaning {data-icon="fa-table" data-orientation=rows}
+=====================================
+
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+```{r load-data}
+covid <- read_csv(here::here('data/owid-covid-data.csv'))
+vax <- read_csv(here::here('data/vaccination-data.csv'))
+cpi <- read_csv(here::here('data/CPI2020.csv'),
+                skip = 2)
+```
+
+```{r clean-covid}
+# this dataset comes with a codebook found at: https://github.com/owid/covid-19-data/tree/master/public/data 
+
+covid_tidy <- covid %>%
+  
+  #deselect unneeded columns
+  select(-starts_with(c('aged',
+                        'hosp',
+                        'icu',
+                        'new',
+                        'tests',
+                        'weekly')),
+         -ends_with(c('rate',
+                      'smokers')), 
+         -diabetes_prevalence, 
+         -handwashing_facilities,
+         -extreme_poverty,
+         -life_expectancy,
+         -population_density,
+         -stringency_index) %>% 
+  
+  #filter date to 01/04/2021
+  mutate(date = dmy(date)) %>% 
+  filter(date == '2021-04-01')
+```
+
+```{r covid-missing-values}
+#Explore missing values
+#gg_miss_var(covid_tidy)
+
+covid_filled <- covid_tidy %>%
+  
+  #remove continent rows and locations with no cases because they are included in other countries, for example Anguilla is part of UK 
+  filter(!location %in% c('International', 
+                          'Africa',
+                          'Asia', 
+                          'Europe', 
+                          'European Union',
+                          'North America',
+                          'Oceania', 
+                          'South America',
+                          'World', 
+                          'Anguilla', 
+                          'Bermuda', 
+                          'Cayman Islands',
+                          'Curacao', 
+                          'Faeroe Islands', 
+                          'Falkland Islands',
+                          'Gibraltar',
+                          'Greenland', 
+                          'Guernsey', 
+                          'Hong Kong', 
+                          'Isle of Man',
+                          'Jersey',
+                          'Macao', 
+                          'Montserrat', 
+                          'Northern Cyprus',
+                          'Vatican')) %>%
+      
+  #variables with missing values that will be replaced with 0
+  mutate(across(c(starts_with('people'), 
+                  total_tests_per_thousand,
+                  total_tests, total_vaccinations_per_hundred, 
+                  total_vaccinations, total_deaths,
+                  total_deaths_per_million), 
+                .fns = ~replace_na(.,
+                                   0)),
+         
+         #replace missing human development index with numbers obtained from https://en.populationdata.net/rankings/hdi/
+         human_development_index = case_when(location == 'Kosovo' ~ 0.787,
+                                             location == 'Monaco' ~ 0.956,
+                                             location == 'San Marino' ~ 0.961,
+                                             location == 'Somalia' ~ 0.364,
+                                             location == 'Taiwan' ~ 0.907,
+                                             TRUE ~ human_development_index),
+         
+         #replace missing median age with numbers obtained from https://www.cia.gov/the-world-factbook/field/median-age/country-comparison
+         median_age = case_when(location == 'Andorra' ~ 46.2,
+                                location == 'Dominica' ~ 34.9,
+                                location == 'Kosovo' ~ 30.5,
+                                location == 'Liechtenstein' ~ 43.7,
+                                location == 'Marshall Islands' ~ 23.8,
+                                location == 'Monaco' ~ 55.4,
+                                location == 'Saint Kitts and Nevis' ~ 36.5,
+                                location == 'San Marino' ~ 45.2,
+                                TRUE ~ median_age),
+         
+         #recode Kosovo ISO to make it consistent across all data files
+         iso_code = recode(iso_code, 
+                           OWID_KOS = 'KOS'))
+
+
+#gg_miss_var(covid_filled)
+```
+
+```{r join-with-CPI}
+
+#left_join with CPI
+covid_cpi <- covid_filled %>% 
+  left_join(cpi %>% 
+              #recode Kosovo ISO to make it consistent across all data files
+              mutate(ISO3 = recode(ISO3,
+                                   KSV = 'KOS')),
+              by = c('iso_code' = 'ISO3')) %>% 
+  
+  #remove unneeded variables
+  select(-Country,
+         -Region, 
+         -c(Rank:'World Justice Project Rule of Law Index')) %>% 
+  
+  #rename CPI variable
+  rename(CPI_score_2020 = 'CPI score 2020')
+```
+
+```{r join-with-vax}
+
+#left_join with vax
+covid_clean <- covid_cpi %>% 
+  left_join(vax %>% 
+              #recode Kosovo ISO to make it consistent across all data files
+              mutate(ISO3 = recode(ISO3,
+                                   XKX = 'KOS')),
+              by = c('iso_code' = 'ISO3')) %>%
+  
+  #remove unneeded variables
+  select(-c(COUNTRY:PERSONS_VACCINATED_1PLUS_DOSE_PER100), 
+         -FIRST_VACCINE_DATE, 
+         -NUMBER_VACCINES_TYPES_USED) %>% 
+  
+  #separate vaccines_used column into rows
+  separate_rows(VACCINES_USED,
+                sep = ',') %>%
+  
+  #remove space from beginning of some vaccine names
+  mutate(VACCINES_USED = str_trim(VACCINES_USED)) %>% 
+  
+  #rename VACCINES_USED variable to be lowercase
+  rename(vaccines_used = VACCINES_USED)
+```
+
+Row
+-------------------------------------
+
+### COVID main dataset
+
+The COVID Data is a dataset that covers a huge aspect of COVID 19. We removed many variables that are unneeded and only kept those that are needed for the analysis such as total cases, total deaths, GDP per capita and several other metrics. We also filtered the date to April 1, 2021.
+
+### Dealing with missing value
+
+The COVID Data came with many missing values due to unavailability. To counteract this we removed locations with no cases because they are included in other countries (for example Macao is reported under China), and continent aggregate rows. Some missing values were assumed to be zero, and were imputed as such. Furthermore, we found out through a different datasource missing human development index as well as median age values  for some countries which we replaced the missing values with.
+
+Row
+-------------------------------------
+
+### Joining the main dataset with CPI dataset
+
+We joined our main covid data file with our corruption price index data file. Next, we discarded the unnecessary variables from the CPI dataset that would not contribute to our questions. Finally, to keep the variable names consistent with good naming conventions we renamed CPI variable.
+
+### Joining the main dataset with Vaccination dataset
+
+We further joined our data file from step 4 with our vaccination data file. We then discarded the unnecessary variables from the vaccination dataset that would not contribute to our questions. Next, we separated the different brands of vaccines into separate rows so we could better tackle our research questions. Finally, we did a bit of cleaning on the vaccine brands by removing the space from the beginning of some vaccine brands and renaming the variable name to follow a good naming convention.
+
+
+Global Vaccine Trends {data-icon="fa-globe"}
+=====================================
+
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+```{r distinct-locations}
+covid_dist <- covid_clean %>% 
+  distinct(location, 
+           .keep_all = TRUE)
+```
+
+```{r load-map}
+world_map <- map_data("world") %>% 
+  mutate(region = recode(region,
+                         "USA" = "United States",
+                         "Republic of Congo" = "Congo",
+                         "Ivory Coast" = "Cote d'Ivoire",
+                         "Czech Republic" = "Czechia",
+                         "Democratic Republic of the Congo" = "Democratic Republic of Congo",
+                         "Swaziland" = "Eswatini",
+                         "Micronesia" = "Micronesia (country)",
+                         "Macedonia" = "North Macedonia",
+                         "Timor-Leste" = "Timor",
+                         "UK" = "United Kingdom"))
+
+```
+
+```{r covid-map}
+covid_map <- covid_dist %>% 
+  left_join(world_map, 
+            by = c("location" = "region"))
+```
+
+Inputs {.sidebar}
+-------------------------------------
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+### Maps
+
+* Europe, the US and South America had the highest rates of cases
+
+* While the US had many vaccinations in line with their cases rate, the vaccination rate for the majority of the remaining countries is not line with their cases rate (South America for example)
+
+### Graphs
+
+* North America, Europe and South America each had very high case rates, while Asia, Africa and Oceania's case rates were very low
+
+* The vaccination rates do not match the case rates per continent: South America has much lower vaccination rates than Europe and North America, and is overtook by Asia whose case rates are much lower. Differing GDP and corruption levels between continents generally might be a factor
+
+Column
+-------------------------------------
+
+### Cases per Million Global Map
+```{r cases-map}
+p1 <- ggplot(covid_map) + 
+  geom_polygon(aes(x = long,
+                   y = lat,
+                   group = group,
+                   fill = total_cases_per_million,
+                   label = location)) +
+  theme_map() +
+  labs(fill = "Total cases per million")+
+  scale_fill_viridis(na.value = "white")
+
+ggplotly(p1)
+```
+
+### Vaccinations per 100 Global Map
+```{r vax-map}
+p2 <- ggplot(covid_map) + 
+  geom_polygon(aes(x = long,
+                   y = lat,
+                   group = group,
+                   fill = total_vaccinations_per_hundred,
+                   label = location)) +
+  theme_map() +
+  labs(fill = "Total vaccinations per hundred")+
+  scale_fill_viridis(na.value = "white")
+
+ggplotly(p2)
+```
+
+
+
+Column
+-------------------------------------
+
+### Cases per Continent
+```{r cases-graph}
+covid_dist %>% group_by(continent) %>% 
+  summarise(cases = sum(total_cases),
+            population = sum(population),
+            cases_per_million = cases / population * 1000000) %>% 
+  
+  ggplot(aes(x = fct_reorder(continent,
+                             cases_per_million),
+             y = cases_per_million,
+             fill = continent)) + 
+  geom_col() +
+  theme(axis.text.x = element_text(size = 9)) +
+  labs(x = "Continent", 
+       y = "Cases per million")
+```
+
+### Vaccinations per Continent
+```{r vax-graph}
+covid_dist %>% group_by(continent) %>% 
+  summarise(vaccinations = sum(total_vaccinations),
+            population = sum(population),
+            vaccinations_per_hundred = vaccinations / population *100) %>% 
+  
+  ggplot(aes(x = fct_reorder(continent, 
+                             vaccinations_per_hundred), 
+             y = vaccinations_per_hundred, 
+             fill = continent)) + 
+  geom_col() +
+  theme(axis.text.x = element_text(size = 9)) +
+  labs(x = "Continent",
+       y = "Vaccinations per 100")
+```
+
+Most Vaccinated Countries {data-icon="fa-user-md"}
+=====================================
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+Column {data-width=700}
+-------------------------------------
+
+
+### Top 5 Vaccinated Countries per Continent
+```{r top-countries-by-cont, fig.height=6}
+covid_dist %>% group_by(continent) %>% 
+  arrange(-total_vaccinations_per_hundred) %>% 
+  slice_head(n = 5) %>% 
+  ungroup() %>%
+  mutate(location = recode(location,
+                           "Equatorial Guinea" = "Eq. Guinea",
+                           "United Arab Emirates" = "UAE",
+                           "United Kingdom" = "UK",
+                           "Micronesia (country)" = "Micronesia")) %>% 
+  
+  ggplot(aes(x = reorder_within(location,
+                                total_vaccinations_per_hundred,
+                                continent), 
+             y = total_vaccinations_per_hundred,
+             fill = continent)) +
+  geom_col() +
+  scale_x_reordered() +
+  facet_wrap(~ continent, 
+             scales = "free") +
+  theme(axis.text.x = element_text(angle = 45, 
+                                   hjust = 1), 
+        legend.position = "none") +
+  labs(x = "", 
+       y = "Vaccinations per 100")
+```
+
+Column {data-width=300}
+-------------------------------------
+
+
+### Top Vaccinated Countries
+```{r top-countries-vax, out.height="100%"}
+covid_dist %>% select(location,
+                      continent, 
+                      total_vaccinations_per_hundred) %>%
+  arrange(-total_vaccinations_per_hundred) %>%
+  head(12) %>%
+  kable() %>%
+  kable_material(c("striped", "hover"))
+```
+
+
+
+Most Used Vaccine in the World {data-orientation=rows}
+=====================================  
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+```{r}
+covid_clean_nona <- na.omit(covid_clean)
+```
+
+
+Inputs {.sidebar}
+-------------------------------------
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+##### <b> Most Used Vaccine </b>
+* The most used vaccine is <b> AstraZeneca - AZD1222 </b> with 86 countries using it.
+
+##### <b> Least Used Vaccine </b>
+* The least used vaccine is <b> SRCVB - EpiVacCorona </b> and <b> Anhui ZL - Recombinant </b> with only 1 country using it.
+
+Row
+--------------------------------------
+
+### Most popular vaccine
+```{r, echo = FALSE}
+mostpopular=covid_clean %>% count(vaccines_used) %>%
+  arrange(desc(n)) %>%
+  select(vaccines_used) %>%
+  head(mostpopular, n =1)
+ 
+valueBox(value = mostpopular, icon = "fa-syringe", caption = "Most used Vaccine", color = "lightgreen")
+
+```
+
+### Least popular vaccine
+```{r, echo = FALSE}
+leastpopular=covid_clean %>% count(vaccines_used) %>%
+  arrange(n) %>%
+  select(vaccines_used) 
+ 
+leastpopular1 <- leastpopular %>% slice(1)
+leastpopular2 <- leastpopular %>% slice(2)
+
+#How to put both the data into value box? 
+valueBox(value = "Anhui ZL - Recombinant & SRCVB - EpiVacCorona", caption = "Least used Vaccines", color = "darkseagreen")
+```
+
+Row
+-------------------------------------
+<br>
+<br>
+
+### What are the numbers like?
+```{r, echo = FALSE}
+world <- covid_clean_nona %>% group_by(vaccines_used) %>%   mutate(count = n())
+
+g1 <-ggplot(data=world, aes(x=reorder(vaccines_used,-count), fill=vaccines_used)) +
+  geom_bar(stat="count") +
+  theme(axis.text.x=element_blank(),
+        legend.title = element_text(size = 12)) +
+  labs(x = "Vaccine Brands",
+       y = "Number of Countries",
+       fill = "Different Vaccine Brands")
+
+ggplotly(g1)
+
+```
+
+Per Continent {data-orientation=rows}
+===================================== 
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+Inputs {.sidebar}
+-------------------------------------
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+##### <b> North America </b>
+* <b> AstraZeneca - AZD1222 </b> is the most commonly used vaccine in North America, with a country count of 13. 
+
+##### <b> South America </b> 
+* South America had one of the most even distribution of brands.
+* <b> AstraZeneca - AZD1222 </b> is the most used with a country count of 8.
+
+##### <b> Africa </b>
+* Africa varies from the rest, with <b> SII - Covishield </b> being the most used by 38 countries
+* AstraZeneca the most used vaccine world wide, was only the 5th most used in Africa. 
+
+##### <b> Europe </b>
+* The top vaccines consisted of <b> AstraZeneca - AZD1222 </b> and <b> Pfizer BioNTech - Comirnaty </b> with both having a country count of 37. 
+* Europe was the only continent to use SRCVB - EpiVacCorona.
+
+##### <b> Oceania </b>
+* Oceania has a very small data pool compared to the other continents
+* The most used vaccine is still <b> AstraZeneca - AZD1222 </b>
+
+##### <b> Asia </b>
+* Asia had the greatest variety in vaccines 
+* The top used vaccine is the <b> Pfizer BioNTech - Comirnaty </b> at 24 countries. 
+* Asia is the only continent to use Anhui ZL - Recombinant.  
+
+
+Row 
+--------------------------------------
+
+```{r, echo = FALSE}
+
+North_America <- filter(covid_clean_nona, continent %in% "North America") %>%
+  group_by(vaccines_used) %>%
+  mutate(count=n())
+
+NA_graph <-ggplot(data=North_America, aes(x=reorder(vaccines_used,-count), fill=vaccines_used)) +
+  geom_bar(stat="count") +
+  theme(axis.text.x=element_blank(),
+        legend.title=element_blank()) +
+  labs(x = "Vaccine Brands",
+       y = "Number of Countries",
+       title = "Different Vaccine Brands in North America")
+
+ggplotly(NA_graph)
+
+```
+
+```{r, echo = FALSE}
+
+South_America <- filter(covid_clean_nona, continent %in% "South America") %>%
+  group_by(vaccines_used) %>%
+  mutate(count=n())
+
+SA_graph <-ggplot(data=South_America, aes(x=reorder(vaccines_used,-count), fill=vaccines_used)) +
+  geom_bar(stat="count") +
+  theme(axis.text.x=element_blank(),
+        legend.title=element_blank()) +
+  labs(x = "Vaccine Brands",
+       y = "Number of Countries",
+       title = "Different Vaccine Brands in South America")
+
+ggplotly(SA_graph)
+
+```
+
+```{r, echo = FALSE}
+
+Africa <- filter(covid_clean_nona, continent %in% "Africa") %>%
+  group_by(vaccines_used) %>%
+  mutate(count=n())
+
+Africa_graph <-ggplot(data=Africa, aes(x=reorder(vaccines_used,-count), fill=vaccines_used)) +
+  geom_bar(stat="count") +
+  theme(axis.text.x=element_blank(),
+        legend.title=element_blank()) +
+  labs(x = "Vaccine Brands",
+       y = "Number of Countries",
+       title = "Different Vaccine Brands in Africa")
+
+ggplotly(Africa_graph)
+
+```
+Row 
+--------------------------------------
+
+
+```{r, echo = FALSE}
+
+Europe <- filter(covid_clean_nona, continent %in% "Europe") %>%
+  group_by(vaccines_used) %>%
+  mutate(count=n())
+
+Europe_graph <-ggplot(data=Europe, aes(x=reorder(vaccines_used,-count), fill=vaccines_used)) +
+  geom_bar(stat="count") +
+  theme(axis.text.x=element_blank(),
+        legend.title=element_blank()) +
+  labs(x = "Vaccine Brands",
+       y = "Number of Countries",
+       title = "Different Vaccine Brands in Europe")
+
+ggplotly(Europe_graph)
+
+```
+
+```{r, echo = FALSE}
+
+Oceania <- filter(covid_clean_nona, continent %in% "Oceania") %>%
+  group_by(vaccines_used) %>%
+  mutate(count=n())
+
+Oceania_graph <-ggplot(data=Oceania, aes(x=reorder(vaccines_used,-count), fill=vaccines_used)) +
+  geom_bar(stat="count") +
+  theme(axis.text.x=element_blank(),
+        legend.title=element_blank()) +
+  labs(x = "Vaccine Brands",
+       y = "Number of Countries",
+       title = "Different Vaccine Brands in Oceania")
+
+ggplotly(Oceania_graph)
+
+```
+
+```{r, echo = FALSE}
+
+Asia <- filter(covid_clean_nona, continent %in% "Asia") %>%
+  group_by(vaccines_used) %>%
+  mutate(count=n())
+
+Asia_graph <-ggplot(data=Asia, aes(x=reorder(vaccines_used,-count), fill=vaccines_used)) +
+  geom_bar(stat="count") +
+  theme(axis.text.x=element_blank(),
+        legend.title=element_blank()) +
+  labs(x = "Vaccine Brands",
+       y = "Number of Countries",
+       title = "Different Vaccine Brands in Asia")
+
+ggplotly(Asia_graph)
+
+```
+
+Countries with the Most Number of Brands {data-orientation=rows}
+===================================== 
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+Inputs {.sidebar}
+-------------------------------------
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+##### <b> Vaccine Variety </b>
+* The <b> Philipines </b> is the country with the most number of different vaccines at 9 different kinds.
+
+Row 
+--------------------------------------
+
+
+```{r, echo = FALSE}
+Most <- count(covid_clean_nona, location) %>%
+  arrange(desc(n)) %>%
+  rename("Number of vaccine brands" = n) %>%
+  rename(Country = location)
+
+datatable(Most, class = 'cell-border stripe')
+
+```
+GDP vs Vaccinations and Cases {data-icon="fa-globe"}
+=============================
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+```{r Filtered-Data}
+covid_clean2 <- covid_clean %>%
+  distinct(location, .keep_all= TRUE) %>%  
+  arrange(total_vaccinations) 
+
+
+
+filtered_covid_clean <- covid_clean2 %>%
+  select(location,continent,total_vaccinations_per_hundred, gdp_per_capita,total_cases_per_million) %>%
+  arrange(-total_vaccinations_per_hundred)
+
+```
+
+Inputs {.sidebar}
+-------------------------------------
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+
+VACC vs GDP 
+
+-	Most low GDP per capita countries have zero vaccinations.
+
+-	Some low GDP per capita countries have low to high level of vaccinations.
+
+-	high level of vaccination due to donations. 
+
+-	Some positive relationship between GDP_per_capita and total_vaccinations_per_hundred. 
+- The relationship breaks after GDP per capita > 60000
+
+-	Conclusion = gdp_per_capita is not a strong explanatory variable on total_vaccinations_per_hundred
+
+
+
+
+
+
+Cases vs GDP 
+
+-	A certain extent of Linear relationship can be detected. 
+
+-	Wealthier countries tend to have higher total_cases_per_million (based on GDP_per_capita)
+
+-	Conclusion = the linear relationship is most visible for European countries compared to other countries. 
+
+column 
+--------------------------------------
+### VACC vs GDP
+```{r VACC-vs-GDP}
+VAC_vs_GDP <-ggplot(filtered_covid_clean,
+       aes(x = gdp_per_capita,
+           y = total_vaccinations_per_hundred,
+           text = location,
+           colour = continent)) +
+  geom_point() 
+ggplotly()
+```
+
+column
+--------------------------------------
+### Cases vs GDP
+``` {r Cases-vs-GDP}
+VAC_vs_CASES <- ggplot(filtered_covid_clean,
+                       aes(x = gdp_per_capita,
+                           y = total_cases_per_million,
+                           text = location,
+                           colour = continent)) +
+  geom_point()
+ggplotly()
+```
+
+
+CPI score {data-orientation=rows}
+=====================================
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+Inputs {.sidebar}
+-------------------------------------
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+* Less than 40% vaccinated countries are tend to be highly corrupted while top three countries in terms of vaccination level are belong to less corrupted cluster 
+
+* The most of the countries are vaccinated less than 20% due to the recent vaccine invention
+
+* There are numerous countries that reported small number of cases are highly corrupted and haven't started vaccination yet 
+
+```{r echo=FALSE}
+q2 <- covid_clean[!duplicated(covid_clean$iso_code), ]
+```
+
+Column {data-width=500}
+-----------------------------------------------------------------------
+
+### CPI vs Vaccination
+
+```{r}
+p1=plot_ly(q2,
+        x= ~ `CPI_score_2020`,
+        y= ~ `total_vaccinations_per_hundred`,
+        color = ~ `continent`,
+        name = ~ `location`,
+        showlegend = FALSE, size= ~`total_cases_per_million`) %>%
+  layout(xaxis=list(title="CPI score"),
+         yaxis=list(title="People vaccinated per 100"))
+
+p1
+```
+
+### CPI vs Covid-19 test
+
+```{r}
+p2=plot_ly(q2,
+        x= ~ `CPI_score_2020`,
+        y= ~ `total_tests_per_thousand`,
+        color = ~ `continent`,
+        name = ~ `location`,
+        showlegend = FALSE, size= ~`total_cases_per_million`) %>%
+  layout(xaxis=list(title="CPI score"),
+         yaxis=list(title="People tested per 1000"))
+
+p2
+```
+
+HDI {data-orientation=rows}
+===================================== 
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+Inputs {.sidebar}
+-------------------------------------
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+* The number of tests are tend to be higher in developed countries
+
+* On the other hand, the number of Covid-19 test can be resulted by the infection level
+
+Column {data-width=500}
+-----------------------------------------------------------------------
+
+### HDI vs Vaccination 
+
+```{r}
+p5=plot_ly(q2,
+        x= ~ `human_development_index`,
+        y= ~ `total_vaccinations_per_hundred`,
+        color = ~ `continent`,
+        name = ~ `location`,
+        showlegend = FALSE, size= ~`total_cases_per_million`) %>%
+  layout(xaxis=list(title="Human development index"),
+         yaxis=list(title="People vaccinated per 100"))
+
+p5
+```
+
+### HDI vs Covid-19 test
+
+```{r}
+p6=plot_ly(q2,
+        x= ~ `human_development_index`,
+        y= ~ `total_tests_per_thousand`,
+        color = ~ `continent`,
+        name = ~ `location`,
+        showlegend = FALSE, size= ~`total_cases_per_million`) %>%
+  layout(xaxis=list(title="Human development index"),
+         yaxis=list(title="People tested per 1000"))
+
+p6
+```
+
+CPI vs Vaccinations {data-orientation=rows}
+=====================================     
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+Inputs {.sidebar}
+-------------------------------------
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+* Simple regression analysis on the relationship between the corruption ratio and the level of vaccination can explain less than 20% of the vaccination level and the number of test as well
+
+* It is indicating that there is an improvement room in the model
+
+Row {data-height=400}
+-------------------------------------
+
+### Regression (r2=17.7)
+
+```{r}
+mod1 <- lm(total_vaccinations_per_hundred ~ CPI_score_2020, data = q2)
+
+tidy(mod1)
+```
+### Residual visualisation
+<br>
+<br>
+```{r}
+mod_diagnostics <- augment(mod1)
+
+var_scatter <- ggplot(q2, 
+       aes(x =CPI_score_2020 ,
+          y = total_vaccinations_per_hundred)) + 
+  geom_point(alpha = 0.4) +
+geom_smooth(method = "lm", se = FALSE)
+
+var_scatter_plotly <- var_scatter  +
+  # overlay fitted values
+  geom_point(data = mod_diagnostics, 
+             aes(y = .fitted), 
+             color = "blue", 
+             alpha = 0.2) +
+  # draw a line segment from the fitted value to observed value
+  geom_segment(data = mod_diagnostics, 
+               aes(xend = CPI_score_2020, y = .fitted, yend = total_vaccinations_per_hundred),
+               color = "blue",
+               alpha = 0.2)
+
+ggplotly(var_scatter_plotly)
+```   
+
+Row {data-height=600}
+-------------------------------------
+  
+    
+### Residuals plots
+
+```{r}
+resid_panel(mod1, plots = "all")
+```
+
+CPI vs Tests {data-orientation=rows}
+=====================================     
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+Inputs {.sidebar}
+-------------------------------------
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+* Simple regression analysis on the relationship between HDI and the level of vaccination can explain around 20% of the vaccination level and the number of test as well
+
+* It is indicating that there is an improvement room in the model
+
+
+Row {data-height=400}
+-------------------------------------
+
+### Regression plot (r2=18)
+
+```{r}
+mod2 <- lm(total_tests_per_thousand ~ CPI_score_2020, data = q2)
+
+tidy(mod2)
+
+```
+### Residual visualisation
+
+```{r}
+mod_diagnostics2 <- augment(mod2)
+
+var_scatter2 <- ggplot(q2, 
+       aes(x =CPI_score_2020 ,
+          y = total_tests_per_thousand)) + 
+  geom_point(alpha = 0.4) +
+geom_smooth(method = "lm", se = FALSE)
+
+var_scatter2_pl <- var_scatter2  +
+  # overlay fitted values
+  geom_point(data = mod_diagnostics2, 
+             aes(y = .fitted), 
+             color = "blue", 
+             alpha = 0.2) +
+  # draw a line segment from the fitted value to observed value
+  geom_segment(data = mod_diagnostics2, 
+               aes(xend = CPI_score_2020, y = .fitted, yend = total_tests_per_thousand),
+               color = "blue",
+               alpha = 0.2)
+
+ggplotly(var_scatter2_pl)
+```   
+
+Row {data-height=600}
+-------------------------------------
+    
+### Residual plots
+
+```{r}
+resid_panel(mod2, plots = "all")
+```
+
+Conclusions
+=====================================
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+As a result of the analysis performed, the following conclusions were reached:
+
+1. The case rates for a majority of the countries does not match their vaccination rates: high case rates does not result in high vaccination rates and vice versa. This is also reflected on a per continent basis on average. The top five vaccinated countries per continent were also highlight, of note is the very low vaccination rate in Africa excluding Seychelles, as well as the very low rate in Oceania. Israel, Seychelles, UAE, Chile and Bhutan occupy the top five spots worldwide in vaccination rates.
+
+2. Through the exploration of the different Vaccines used worldwide, it's become apparent that AstraZeneca is the most trusted vaccine, with it being commonly used throughout the world, even within the separate continents. On the other hand, EpiVacCorona and Anhui ZL are only being used in the country of origin as it is still relatively new compared to the other available vaccines, making it the least used vaccine worldwide.
+
+3. Since there is little to no relationship between gdp per capita and the level of vaccination, GDP per capita is not a strong explanatory variable in predicting or explaining the level of vaccination. Furthermore, in general, wealthier countries tend to have higher total covid cases.
+
+4. We can see that less than 40% vaccinated countries are tend to be highly corrupted while top three countries in terms of vaccination level are belong to less corrupted cluster. The number of tests are higher in less corrupted countries while less than 20 people are getting testes in highly corrupted countries. We generated a simple regression analysis on the relationship between corruption ratio and the level of vaccination, the number of tests. It is resulted that the corruption level can explain around 20% of the vaccination level and the number of test as well.
+
+References {data-orientation=rows}
+===================================== 
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+
+### Data
+* [Corruption Index](https://www.transparency.org/en/cpi/2020/index/nzl#)
+* [Covid Data](https://ourworldindata.org/coronavirus-data)
+  + [Codebook](https://github.com/owid/covid-19-data/tree/master/public/data)
+* [Vaccination Data](https://covid19.who.int/info/)
+
+### Software
+* [R Software](https://www.R-project.org/)
+
+### Packages
+* [broom](https://CRAN.R-project.org/package=broom)
+* [DT](https://CRAN.R-project.org/package=DT)
+* [flexdashboard](https://CRAN.R-project.org/package=flexdashboard)
+* [ggmap](https://journal.r-project.org/archive/2013-1/kahle-wickham.pdf)
+* [ggResidpanel](https://CRAN.R-project.org/package=ggResidpanel)
+* [ggthemes](https://CRAN.R-project.org/package=ggthemes)
+* [here](https://CRAN.R-project.org/package=here)
+* [janitor](https://CRAN.R-project.org/package=janitor)
+* [kableExtra](https://CRAN.R-project.org/package=kableExtra)
+* [lubridate](https://www.jstatsoft.org/v40/i03/)
+* [maps](https://CRAN.R-project.org/package=maps)
+* [modelr](https://CRAN.R-project.org/package=modelr)
+* [naniar](https://CRAN.R-project.org/package=naniar)
+* [plotly](https://plotly-r.com)
+* [tidytext](http://dx.doi.org/10.21105/joss.00037)
+* [tidyverse](https://doi.org/10.21105/joss.01686)
+* [viridis](https://sjmgarnier.github.io/viridis/)
+
+
+### Misc
+* [EpiVacCorona](https://www.precisionvaccinations.com/vaccines/epivaccorona-vaccine)
+* [Recombinant](https://www.thehindu.com/news/international/china-approves-fourth-covid-19-vaccine-for-emergency-use/article34080651.ece)
+* [Vaccine Donation](https://www.globalcitizen.org/en/content/covid-19-vaccine-donations-around-the-world/)
+

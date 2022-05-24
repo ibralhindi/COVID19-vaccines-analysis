@@ -1,0 +1,126 @@
+---
+title: "ETC1010-5510 Project"
+subtitle: "T3_Wed_suggrants"
+author: "Dulamragchaa Bat-Erdene, Heidi Victoria, Ibrahim Al-hindi, Wilson Victor Susanto"
+date : "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r libraries}
+library(tidyverse)
+library(here)
+library(naniar)
+library(lubridate)
+```
+
+```{r load-data}
+covid <- read_csv('../data/owid-covid-data.csv')
+vax <- read_csv('../data/vaccination-data.csv')
+cpi <- read_csv('../data/CPI2020.csv', skip = 2)
+```
+
+
+## CLEANING
+
+```{r clean-covid}
+# this dataset comes with a codebook found at: https://github.com/owid/covid-19-data/tree/master/public/data 
+
+covid_tidy <- covid %>%
+  
+  #deselect unneeded columns
+  select(-starts_with(c('aged','hosp','icu','new','tests','weekly')),
+         -ends_with(c('rate','smokers')), -diabetes_prevalence, -handwashing_facilities, -extreme_poverty, -life_expectancy, -population_density,
+         -stringency_index) %>% 
+  
+  #filter date to 01/04/2021
+  mutate(date = dmy(date)) %>% 
+  filter(date == '2021-04-01')
+```
+
+
+```{r covid-missing-values}
+#Explore missing values
+gg_miss_var(covid_tidy)
+
+covid_filled <- covid_tidy %>%
+  
+  #remove continent rows and locations with no cases because they are included in other countries, for example Anguilla is part of UK 
+  filter(!location %in% c('International', 'Africa', 'Asia', 'Europe', 'European Union', 'North America',
+                  'Oceania', 'South America', 'World', 'Anguilla', 'Bermuda', 'Cayman Islands', 'Curacao', 'Faeroe Islands', 'Falkland Islands',
+                  'Gibraltar', 'Greenland', 'Guernsey', 'Hong Kong', 'Isle of Man', 'Jersey', 'Macao', 'Montserrat', 'Northern Cyprus', 'Vatican')) %>%
+      
+  #variables with missing values that will be replaced with 0
+  mutate(across(c(starts_with('people'), total_tests_per_thousand, total_tests, total_vaccinations_per_hundred, total_vaccinations, total_deaths,
+                  total_deaths_per_million), .fns = ~replace_na(., 0)),
+         
+         #replace missing human development index with numbers obtained from https://en.populationdata.net/rankings/hdi/
+         human_development_index = case_when(location == 'Kosovo' ~ 0.787,
+                                             location == 'Monaco' ~ 0.956,
+                                             location == 'San Marino' ~ 0.961,
+                                             location == 'Somalia' ~ 0.364,
+                                             location == 'Taiwan' ~ 0.907,
+                                             TRUE ~ human_development_index),
+         
+         #replace missing median age with numbers obtained from https://www.cia.gov/the-world-factbook/field/median-age/country-comparison
+         median_age = case_when(location == 'Andorra' ~ 46.2,
+                                location == 'Dominica' ~ 34.9,
+                                location == 'Kosovo' ~ 30.5,
+                                location == 'Liechtenstein' ~ 43.7,
+                                location == 'Marshall Islands' ~ 23.8,
+                                location == 'Monaco' ~ 55.4,
+                                location == 'Saint Kitts and Nevis' ~ 36.5,
+                                location == 'San Marino' ~ 45.2,
+                                TRUE ~ median_age),
+         
+         #recode Kosovo ISO to make it consistent across all data files
+         iso_code = recode(iso_code, OWID_KOS = 'KOS'))
+
+
+gg_miss_var(covid_filled)
+```
+
+```{r join-with-CPI}
+
+#left_join with CPI
+covid_cpi <- covid_filled %>% left_join(cpi %>% 
+                               #recode Kosovo ISO to make it consistent across all data files
+                               mutate(ISO3 = recode(ISO3, KSV = 'KOS')),
+                             by = c('iso_code' = 'ISO3')) %>% 
+  
+  #remove unneeded variables
+  select(-Country, -Region, -c(Rank:'World Justice Project Rule of Law Index')) %>% 
+  
+  #rename CPI variable
+  rename(CPI_score_2020 = 'CPI score 2020')
+```
+
+```{r join-with-vax}
+
+#left_join with vax
+covid_clean <- covid_cpi %>% left_join(vax %>% 
+                               #recode Kosovo ISO to make it consistent across all data files
+                               mutate(ISO3 = recode(ISO3, XKX = 'KOS')),
+                              by = c('iso_code' = 'ISO3')) %>%
+  
+  #remove unneeded variables
+  select(-c(COUNTRY:PERSONS_VACCINATED_1PLUS_DOSE_PER100), -FIRST_VACCINE_DATE, -NUMBER_VACCINES_TYPES_USED) %>% 
+  
+  #separate vaccines_used column into rows
+  separate_rows(VACCINES_USED, sep = ',') %>%
+  
+  #remove space from beginning of some vaccine names
+  mutate(VACCINES_USED = str_trim(VACCINES_USED)) %>% 
+  
+  #rename VACCINES_USED variable to be lowercase
+  rename(vaccines_used = VACCINES_USED)
+```
+
+```{r save-clean-file}
+
+#save clean data as csv
+write_csv(covid_clean, '../data/covid_clean.csv')
+```
